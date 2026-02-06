@@ -2,22 +2,27 @@
   <div class="app-container">
     <main class="app-main">
       <!-- 工具栏：搜索 + 估值说明 -->
-      <div class="toolbar">
-        <div class="toolbar-center">
-          <FundSearch @fund-added="handleFundAdded" />
+      <div class="toolbar" :class="{ 'toolbar-collapsed': isToolbarCollapsed }">
+        <div class="toolbar-content">
+          <div class="toolbar-center">
+            <FundSearch @fund-added="handleFundAdded" />
+          </div>
+          <div class="toolbar-right">
+            <el-tooltip content="估值仅供参考，真实数据每天晚上20:00后更新" placement="top">
+              <span class="disclaimer">
+                <el-icon><InfoFilled /></el-icon>
+                估值说明
+              </span>
+            </el-tooltip>
+          </div>
         </div>
-        <div class="toolbar-right">
-          <el-tooltip content="估值仅供参考，真实数据每天晚上20:00后更新" placement="top">
-            <span class="disclaimer">
-              <el-icon><InfoFilled /></el-icon>
-              估值说明
-            </span>
-          </el-tooltip>
+        <div class="toolbar-toggle" @click="isToolbarCollapsed = !isToolbarCollapsed">
+          <el-icon :class="{ 'rotate-180': isToolbarCollapsed }"><ArrowUp /></el-icon>
         </div>
       </div>
 
       <!-- 主内容区 -->
-      <div class="content-section">
+      <div class="content-section" :class="{ 'content-collapsed': isToolbarCollapsed }">
         <!-- 自选列表 -->
         <div class="list-panel">
           <FundList
@@ -44,7 +49,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { InfoFilled } from '@element-plus/icons-vue'
+import { InfoFilled, ArrowUp } from '@element-plus/icons-vue'
 import { FundSearch, FundList, FundDetail, UpdateNotification } from './components'
 import { useWatchlistStore } from './stores/watchlist'
 import type { Fund, FundBasicInfo } from '@shared/types'
@@ -52,6 +57,7 @@ import type { Fund, FundBasicInfo } from '@shared/types'
 const watchlistStore = useWatchlistStore()
 
 const selectedFund = ref<Fund | null>(null)
+const isToolbarCollapsed = ref(false)
 
 /**
  * 初始化：加载自选列表
@@ -106,7 +112,11 @@ async function handleFundAdded(_fund: FundBasicInfo) {
  * 处理选择基金
  */
 function handleSelectFund(fund: Fund) {
-  selectedFund.value = fund
+  if (selectedFund.value?.code === fund.code) {
+    selectedFund.value = null
+  } else {
+    selectedFund.value = fund
+  }
 }
 
 /**
@@ -176,7 +186,6 @@ async function handleClearAll() {
 body {
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  overflow-x: hidden;
 }
 
 .app-container {
@@ -188,11 +197,92 @@ body {
 .app-main {
   flex: 1;
   padding: var(--spacing-lg);
+  padding-top: calc(56px + 20px + var(--spacing-lg) + var(--spacing-md));
   background: var(--color-bg);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-md);
-  overflow-y: auto;
+  transition: padding-top 0.3s ease;
+}
+
+.app-main:has(.content-collapsed) {
+  padding-top: calc(20px + var(--spacing-lg));
+}
+
+.toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  margin: var(--spacing-lg);
+  margin-bottom: 0;
+  transition: transform 0.3s ease;
+}
+
+.toolbar-collapsed {
+  transform: translateY(calc(-100% - var(--spacing-lg)));
+}
+
+.toolbar-content {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-white);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.toolbar-toggle {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translate(-50%, 100%);
+  width: 48px;
+  height: 20px;
+  background: var(--color-white);
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.toolbar-toggle::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 8px;
+  height: 8px;
+  background: radial-gradient(circle at 0 0, transparent 8px, var(--color-white) 8px);
+}
+
+.toolbar-toggle::after {
+  content: '';
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 8px;
+  height: 8px;
+  background: radial-gradient(circle at 100% 0, transparent 8px, var(--color-white) 8px);
+}
+
+.toolbar-toggle:hover {
+  background: #f5f7fa;
+}
+
+.toolbar-toggle .el-icon {
+  font-size: 14px;
+  color: #909399;
+  transition: transform 0.3s ease;
+}
+
+.toolbar-toggle .rotate-180 {
+  transform: rotate(180deg);
 }
 
 .search-section {
@@ -202,17 +292,6 @@ body {
   box-shadow: var(--shadow-sm);
 }
 
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  padding: var(--spacing-sm) var(--spacing-md);
-  background: var(--color-white);
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow-sm);
-  flex-wrap: wrap;
-}
-
 .toolbar-center {
   flex: 1;
   min-width: 200px;
@@ -220,6 +299,9 @@ body {
 
 .toolbar-right {
   flex-shrink: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
 }
 
 .disclaimer {
@@ -276,7 +358,12 @@ body {
 @media (max-width: 900px) {
   .app-main {
     padding: var(--spacing-sm);
+    padding-top: calc(56px + 20px + var(--spacing-lg) + var(--spacing-sm));
     gap: var(--spacing-sm);
+  }
+
+  .app-main:has(.content-collapsed) {
+    padding-top: calc(20px + var(--spacing-lg));
   }
 
   .content-section {
@@ -312,7 +399,12 @@ body {
 
   .app-main {
     padding: var(--spacing-xs);
+    padding-top: calc(56px + 20px + var(--spacing-lg) + var(--spacing-xs));
     gap: var(--spacing-xs);
+  }
+
+  .app-main:has(.content-collapsed) {
+    padding-top: calc(20px + var(--spacing-lg));
   }
 
   .search-section {
@@ -348,6 +440,11 @@ body {
 
   .app-main {
     padding: var(--spacing-xs);
+    padding-top: calc(56px + 20px + var(--spacing-lg) + var(--spacing-xs));
+  }
+
+  .app-main:has(.content-collapsed) {
+    padding-top: calc(20px + var(--spacing-lg));
   }
 
   .content-section {
