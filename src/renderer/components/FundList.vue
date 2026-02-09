@@ -1,5 +1,11 @@
 <template>
   <div class="fund-list">
+    <!-- 总仓位卡片 -->
+    <div v-if="totalChange !== null" class="total-card" :class="getTotalChangeClass(totalChange)">
+      <span class="total-label">总仓位估值</span>
+      <span class="total-value">{{ formatChange(totalChange) }}</span>
+    </div>
+
     <!-- 列表头部 -->
     <div class="list-header">
       <span class="header-title">自选基金 ({{ funds.length }})</span>
@@ -67,6 +73,7 @@ import type { Fund } from '@shared/types'
 const props = defineProps<{
   funds: Fund[]
   selectedCode?: string
+  totalChange?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -155,6 +162,16 @@ function getChangeClass(change: number): string {
 }
 
 /**
+ * 获取总仓位涨跌颜色类名
+ */
+function getTotalChangeClass(change: number | null): string {
+  if (change === null || isNaN(change)) return 'change-neutral'
+  if (change > 0) return 'change-up'
+  if (change < 0) return 'change-down'
+  return 'change-neutral'
+}
+
+/**
  * 格式化更新时间
  * Requirement 3.2: 显示估值时间
  */
@@ -196,6 +213,39 @@ function formatTime(time: string): string {
   font-size: 16px;
   font-weight: 600;
   color: #303133;
+}
+
+.total-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: 8px 8px 0 0;
+  border-bottom: 1px solid #ebeef5;
+  background: white;
+}
+
+.total-label {
+  font-size: 13px;
+  color: #606266;
+}
+
+.total-value {
+  font-size: 20px;
+  font-weight: 700;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.total-card.change-up .total-value {
+  color: #f56c6c;
+}
+
+.total-card.change-down .total-value {
+  color: #67c23a;
+}
+
+.total-card.change-neutral .total-value {
+  color: #909399;
 }
 
 .header-actions {

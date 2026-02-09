@@ -45,7 +45,19 @@ export const useWatchlistStore = defineStore('watchlist', {
      * Requirement 3.6: 支持按涨跌幅排序自选列表
      */
     fundsSortedByChange: (state): Fund[] =>
-      [...state.funds].sort((a, b) => b.estimatedChange - a.estimatedChange)
+      [...state.funds].sort((a, b) => b.estimatedChange - a.estimatedChange),
+
+    /**
+     * 总仓位估值涨幅（等权重平均）
+     */
+    totalEstimatedChange: (state): number | null => {
+      const validFunds = state.funds.filter(
+        (f) => f.estimatedChange !== undefined && !isNaN(f.estimatedChange)
+      )
+      if (validFunds.length === 0) return null
+      const sum = validFunds.reduce((acc, f) => acc + f.estimatedChange, 0)
+      return sum / validFunds.length
+    }
   },
 
   actions: {

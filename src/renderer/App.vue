@@ -28,6 +28,7 @@
           <FundList
             :funds="watchlistStore.funds"
             :selected-code="selectedFund?.code"
+            :total-change="watchlistStore.totalEstimatedChange"
             @select="handleSelectFund"
             @sort="handleSort"
             @clear-all="handleClearAll"
