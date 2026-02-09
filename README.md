@@ -51,7 +51,6 @@ npm run release:major    # major 版本: 1.0.0 -> 2.0.0
 ```bash
 npm run build        # 打包当前平台
 npm run build:win    # 仅打包 Windows
-npm run build:mac    # 仅打包 macOS
 ```
 
 ## 其他命令
