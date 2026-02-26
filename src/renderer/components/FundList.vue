@@ -2,8 +2,14 @@
   <div class="fund-list">
     <!-- 今日预估卡片 -->
     <div class="total-card" :class="getProfitClass(totalProfit)">
-      <span class="total-label">今日预估</span>
-      <span class="total-value">{{ formatProfit(totalProfit) }} 元</span>
+      <div class="total-left">
+        <span class="total-label">今日预估</span>
+        <el-icon class="hide-toggle" @click="hideAmount = !hideAmount">
+          <Hide v-if="hideAmount" />
+          <View v-else />
+        </el-icon>
+      </div>
+      <span class="total-value">{{ hideAmount ? '****' : formatProfit(totalProfit) }} 元</span>
     </div>
 
     <!-- 列表头部 -->
@@ -63,7 +69,7 @@
             {{ formatChange(fund.estimatedChange) }}
           </span>
           <span class="profit-amount" :class="getChangeClass(fund.estimatedChange)">
-            {{ formatFundProfit(fund) }}
+            {{ hideAmount ? '****' : formatFundProfit(fund) }}
           </span>
         </div>
 
@@ -71,7 +77,7 @@
         <div class="col-value">
           <span class="estimated-value">{{ formatValue(fund.estimatedValue) }}</span>
           <span class="shares-value" @click.stop="handleEditShares(fund)">
-            {{ formatShares(fund.shares) }}
+            {{ hideAmount ? '****' : formatShares(fund.shares) }}
           </span>
         </div>
       </div>
@@ -106,7 +112,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
-import { Refresh, Delete } from '@element-plus/icons-vue'
+import { Refresh, Delete, View, Hide } from '@element-plus/icons-vue'
 import type { Fund } from '@shared/types'
 
 const props = defineProps<{
@@ -128,6 +134,7 @@ const sortOrder = ref<'asc' | 'desc'>('desc')
 const sharesDialogVisible = ref(false)
 const editingFund = ref<Fund | null>(null)
 const editingShares = ref(0)
+const hideAmount = ref(false)
 
 /**
  * 排序后的基金列表
@@ -291,6 +298,23 @@ function getProfitClass(profit: number | null | undefined): string {
 .total-label {
   font-size: 14px;
   color: #909399;
+}
+
+.total-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hide-toggle {
+  cursor: pointer;
+  color: #909399;
+  font-size: 16px;
+  transition: color 0.2s;
+}
+
+.hide-toggle:hover {
+  color: #606266;
 }
 
 .total-value {
