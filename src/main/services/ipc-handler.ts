@@ -1,9 +1,8 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import { IPC_CHANNELS } from '@shared/ipc-channels'
-import type { Fund, FundDetail, StockQuote } from '@shared/types'
+import type { Fund, FundDetail } from '@shared/types'
 import { fundFetcher } from '../fetchers/fund-fetcher'
 import { stockFetcher } from '../fetchers/stock-fetcher'
-import { valuationCalculator } from '../calculator/valuation-calculator'
 import { getStorageService } from './storage-service'
 
 /** 最大并发请求数 */
@@ -111,6 +110,26 @@ export class IPCHandler {
     ipcMain.handle(IPC_CHANNELS.WATCHLIST_CLEAR, async (): Promise<IPCResult<void>> => {
       return this.handleWatchlistClear()
     })
+
+    // 更新基金份额
+    ipcMain.handle(
+      IPC_CHANNELS.WATCHLIST_UPDATE_SHARES,
+      async (_event, code: string, shares: number): Promise<IPCResult<void>> => {
+        return this.handleUpdateShares(code, shares)
+      }
+    )
+
+    // 获取历史净值
+    ipcMain.handle(
+      IPC_CHANNELS.NET_VALUE_HISTORY,
+      async (
+        _event,
+        code: string,
+        range: string
+      ): Promise<IPCResult<{ date: string; value: number }[]>> => {
+        return this.handleNetValueHistory(code, range as '1m' | '3m' | '6m' | '1y' | '3y' | 'all')
+      }
+    )
   }
 
   /**
@@ -144,8 +163,8 @@ export class IPCHandler {
       // 获取基金详情
       const fundDetail = await fundFetcher.getFundDetail(code)
 
-      // 优先获取天天基金网的估值数据
-      const fundValuation = await fundFetcher.getFundValuation(code)
+      // 获取估值数据
+      const fundValuation = await fundFetcher.getFundValuation(code, { force: true })
 
       // 获取股票行情用于更新持仓数据
       const stockCodes = fundDetail.holdings.map((h) => h.stockCode)
@@ -163,34 +182,16 @@ export class IPCHandler {
       })
 
       // 创建完整的基金对象
-      let fund: Fund
-
-      if (fundValuation) {
-        // 使用天天基金网的估值数据
-        fund = {
-          code: fundDetail.code,
-          name: fundDetail.name,
-          netValue: fundValuation.netValue,
-          netValueDate: fundValuation.netValueDate,
-          estimatedValue: fundValuation.estimatedValue,
-          estimatedChange: fundValuation.estimatedChange,
-          updateTime: fundValuation.updateTime,
-          isRealValue: fundValuation.isRealValue,
-          holdings: updatedHoldings
-        }
-      } else {
-        // 降级：使用持仓股票计算估值
-        const valuation = valuationCalculator.calculateValuation(fundDetail, quotes)
-        fund = {
-          code: fundDetail.code,
-          name: fundDetail.name,
-          netValue: fundDetail.netValue,
-          netValueDate: fundDetail.netValueDate,
-          estimatedValue: valuation.estimatedValue,
-          estimatedChange: valuation.estimatedChange,
-          updateTime: valuation.updateTime,
-          holdings: updatedHoldings
-        }
+      const fund: Fund = {
+        code: fundDetail.code,
+        name: fundDetail.name,
+        netValue: fundValuation?.netValue ?? fundDetail.netValue,
+        netValueDate: fundValuation?.netValueDate ?? fundDetail.netValueDate,
+        estimatedValue: fundValuation?.estimatedValue ?? fundDetail.netValue,
+        estimatedChange: fundValuation?.estimatedChange ?? 0,
+        updateTime: fundValuation?.updateTime ?? new Date().toISOString(),
+        isRealValue: fundValuation?.isRealValue ?? false,
+        holdings: updatedHoldings
       }
 
       // 保存到自选列表
@@ -234,7 +235,7 @@ export class IPCHandler {
    */
   async handleValuationRefresh(): Promise<IPCResult<Fund[]>> {
     try {
-      const updatedFunds = await this.updateAllValuations()
+      const updatedFunds = await this.updateAllValuations(true)
       return { success: true, data: updatedFunds }
     } catch (error) {
       const message = error instanceof Error ? error.message : '刷新估值失败'
@@ -287,29 +288,71 @@ export class IPCHandler {
   }
 
   /**
+   * 处理更新基金份额
+   */
+  private async handleUpdateShares(code: string, shares: number): Promise<IPCResult<void>> {
+    try {
+      const storage = getStorageService()
+      const watchlist = storage.getWatchlist()
+
+      const fund = watchlist.find((f) => f.code === code)
+      if (!fund) {
+        return { success: false, error: '该基金不在自选列表中' }
+      }
+
+      fund.shares = shares
+      storage.saveWatchlist(watchlist)
+
+      return { success: true }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '更新份额失败'
+      return { success: false, error: message }
+    }
+  }
+
+  /**
+   * 处理获取历史净值
+   */
+  private async handleNetValueHistory(
+    code: string,
+    range: '1m' | '3m' | '6m' | '1y' | '3y' | 'all'
+  ): Promise<IPCResult<{ date: string; value: number }[]>> {
+    try {
+      const history = await fundFetcher.fetchNetValueHistory(code, range)
+      return { success: true, data: history }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '获取历史净值失败'
+      return { success: false, error: message }
+    }
+  }
+
+  /**
    * 更新所有基金的估值
    * 用于定时更新和手动刷新
-   * 优先使用天天基金网的估值，同时更新持仓股票的实时数据
+   * @param forceUpdate 是否强制更新
    */
-  async updateAllValuations(): Promise<Fund[]> {
+  async updateAllValuations(forceUpdate: boolean = false): Promise<Fund[]> {
     const storage = getStorageService()
     const watchlist = storage.getWatchlist()
+
+    console.log(`[updateAllValuations] forceUpdate=${forceUpdate}, funds=${watchlist.length}`)
 
     if (watchlist.length === 0) {
       return []
     }
 
-    // 使用并发控制获取基金估值（每批最多 5 个请求）
+    // 使用并发控制获取基金估值
     const valuations = await batchExecute(watchlist, (fund) =>
-      fundFetcher.getFundValuation(fund.code)
+      fundFetcher.getFundValuation(fund.code, {
+        isRealValue: fund.isRealValue,
+        force: forceUpdate
+      })
     )
 
-    // 判断是否是交易日（取第一个有效结果）
-    const isTradingDay = valuations.some((v) => v?.isTradingDay)
-    if (!isTradingDay) {
-      console.log('Not a trading day, skip update')
-      return watchlist
-    }
+    console.log(
+      `[updateAllValuations] valuations received:`,
+      valuations.map((v) => (v ? 'ok' : 'null'))
+    )
 
     // 收集所有股票代码，用于更新持仓实时数据
     const allStockCodes = new Set<string>()
@@ -319,7 +362,7 @@ export class IPCHandler {
       }
     }
 
-    // 批量获取股票行情（可能失败，失败时返回空数组）
+    // 批量获取股票行情
     const quotes = await stockFetcher.getStockQuotes(Array.from(allStockCodes))
     const quoteMap = new Map(quotes.map((q) => [q.code, q]))
     const hasStockQuotes = quotes.length > 0
@@ -328,7 +371,7 @@ export class IPCHandler {
     const updatedFunds = watchlist.map((fund, index) => {
       const fundValuation = valuations[index]
 
-      // 更新持仓的实时数据（如果有股票行情的话）
+      // 更新持仓的实时数据
       const updatedHoldings = hasStockQuotes
         ? fund.holdings.map((h) => {
             const quote = quoteMap.get(h.stockCode)
@@ -340,7 +383,7 @@ export class IPCHandler {
           })
         : fund.holdings
 
-      // 如果天天基金网估值获取成功，使用它的数据
+      // 如果获取到新估值，使用新数据
       if (fundValuation) {
         return {
           ...fund,
@@ -354,36 +397,11 @@ export class IPCHandler {
         }
       }
 
-      // 降级：使用持仓股票计算估值（仅当有股票行情时）
-      if (hasStockQuotes) {
-        const fundQuotes = fund.holdings
-          .map((h) => quoteMap.get(h.stockCode))
-          .filter((q): q is StockQuote => q !== undefined)
-
-        const calculatedValuation = valuationCalculator.calculateValuation(
-          {
-            code: fund.code,
-            name: fund.name,
-            type: '',
-            netValue: fund.netValue,
-            netValueDate: fund.netValueDate,
-            holdings: fund.holdings
-          },
-          fundQuotes
-        )
-
-        return {
-          ...fund,
-          estimatedValue: calculatedValuation.estimatedValue,
-          estimatedChange: calculatedValuation.estimatedChange,
-          updateTime: calculatedValuation.updateTime,
-          isRealValue: false,
-          holdings: updatedHoldings
-        }
+      // 没有新数据，只更新持仓
+      return {
+        ...fund,
+        holdings: updatedHoldings
       }
-
-      // 都失败了，保持原数据不变
-      return fund
     })
 
     // 保存更新后的数据
@@ -427,6 +445,8 @@ export class IPCHandler {
     ipcMain.removeHandler(IPC_CHANNELS.WATCHLIST_GET)
     ipcMain.removeHandler(IPC_CHANNELS.WATCHLIST_SAVE)
     ipcMain.removeHandler(IPC_CHANNELS.WATCHLIST_CLEAR)
+    ipcMain.removeHandler(IPC_CHANNELS.WATCHLIST_UPDATE_SHARES)
+    ipcMain.removeHandler(IPC_CHANNELS.NET_VALUE_HISTORY)
     this.mainWindow = null
   }
 }

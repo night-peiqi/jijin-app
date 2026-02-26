@@ -4,5 +4,4 @@
 
 export { FundFetcher, fundFetcher } from './fund-fetcher'
 export { StockFetcher, stockFetcher } from './stock-fetcher'
-export type { IFundService } from './fund-fetcher'
-export type { IStockService } from './stock-fetcher'
+export type { FundValuationResult, NetValueHistory } from './fund-fetcher'

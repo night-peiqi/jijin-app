@@ -180,6 +180,7 @@ export class StorageService implements IStorageService {
       estimatedChange: stored.estimatedChange ?? 0,
       updateTime: stored.updateTime ?? stored.addedAt,
       isRealValue: stored.isRealValue ?? false,
+      shares: stored.shares ?? 0,
       holdings: stored.holdings.map((h) => ({
         stockCode: h.stockCode,
         stockName: h.stockName,
@@ -203,6 +204,7 @@ export class StorageService implements IStorageService {
       estimatedChange: fund.estimatedChange,
       updateTime: fund.updateTime,
       isRealValue: fund.isRealValue,
+      shares: fund.shares,
       holdings: fund.holdings.map((h) => ({
         stockCode: h.stockCode,
         stockName: h.stockName,

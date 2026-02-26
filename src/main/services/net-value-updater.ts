@@ -106,27 +106,28 @@ export class NetValueUpdater {
 
     for (const fund of watchlist) {
       // 跳过已经是今天净值的基金
-      if (fund.netValueDate === today) {
+      if (fund.netValueDate === today && fund.isRealValue) {
         updatedFunds.push(fund)
         continue
       }
 
-      const netValueInfo = await fundFetcher.getLatestNetValue(fund.code)
+      // 使用 getFundValuation 获取真实净值（20:00后会返回真实数据）
+      const valuation = await fundFetcher.getFundValuation(fund.code, { force: true })
 
-      if (netValueInfo && netValueInfo.netValueDate === today) {
-        // 净值已更新到今天，使用接口返回的真实涨跌幅
+      if (valuation && valuation.isRealValue && valuation.netValueDate === today) {
+        // 净值已更新到今天
         const updatedFund: Fund = {
           ...fund,
-          netValue: netValueInfo.netValue,
-          netValueDate: netValueInfo.netValueDate,
-          estimatedValue: netValueInfo.netValue,
-          estimatedChange: netValueInfo.change,
-          updateTime: new Date().toISOString(),
+          netValue: valuation.netValue,
+          netValueDate: valuation.netValueDate,
+          estimatedValue: valuation.estimatedValue,
+          estimatedChange: valuation.estimatedChange,
+          updateTime: valuation.updateTime,
           isRealValue: true
         }
         updatedFunds.push(updatedFund)
         console.log(
-          `Updated net value for ${fund.code}: ${netValueInfo.netValue}, change: ${netValueInfo.change}%`
+          `Updated net value for ${fund.code}: ${valuation.netValue}, change: ${valuation.estimatedChange}%`
         )
       } else {
         // 净值还未更新

@@ -1,179 +1,74 @@
-import axios from 'axios'
+import axios, { AxiosError } from 'axios'
 import type { FundBasicInfo, FundDetail, Holding } from '@shared/types'
 
-/**
- * 搜索 API 响应类型
- */
-interface SearchResponse {
-  ErrCode: number
-  Datas: Array<{
-    CODE: string
-    NAME: string
-    CATEGORY: number
-    FundBaseInfo?: {
-      SHORTNAME?: string
-      FTYPE?: string
-      DWJZ?: number
-      FSRQ?: string
+const API_BASE = 'https://fund-eye-server-omrinldkwt.cn-beijing.fcapp.run'
+const TIMEOUT = 20000
+const MAX_RETRIES = 1
+
+/** 带重试的请求 */
+async function requestWithRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promise<T> {
+  try {
+    return await fn()
+  } catch (err) {
+    if (
+      retries > 0 &&
+      err instanceof AxiosError &&
+      (err.code === 'ECONNABORTED' || !err.response)
+    ) {
+      return requestWithRetry(fn, retries - 1)
     }
-  }>
+    throw err
+  }
+}
+
+/** 判断当前是否是交易时间（9:30-15:00，周一到周五） */
+export function isTradingTime(): boolean {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const hour = now.getHours()
+  const minute = now.getMinutes()
+  const time = hour * 60 + minute
+  return time >= 9 * 60 + 30 && time <= 15 * 60
+}
+
+/** 判断当前是否是 20:00 及以后 */
+function isAfter20(): boolean {
+  return new Date().getHours() >= 20
+}
+
+export interface FundValuationResult {
+  netValue: number
+  netValueDate: string
+  estimatedValue: number
+  estimatedChange: number
+  updateTime: string
+  isRealValue: boolean
+  isTradingDay?: boolean
+}
+
+export interface NetValueHistory {
+  date: string
+  value: number
 }
 
 /**
- * 基金数据服务接口
+ * 基金数据服务
  */
-export interface IFundService {
-  searchFund(code: string): Promise<FundBasicInfo | null>
-  getFundDetail(code: string): Promise<FundDetail>
-}
-
-/**
- * 天天基金网数据抓取服务
- * 实现基金搜索和详情获取功能
- */
-export class FundFetcher implements IFundService {
-  private readonly searchUrl = 'https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx'
-
-  // HTTP 请求超时时间 (毫秒)
-  private readonly timeout = 10000
-
+export class FundFetcher {
   /**
-   * 获取基金实时估值数据
-   * @param code 基金代码
-   * @returns 估值信息
-   */
-  async getFundValuation(code: string): Promise<{
-    netValue: number // 昨日净值
-    netValueDate: string // 净值日期
-    estimatedValue: number // 估算净值
-    estimatedChange: number // 估算涨跌幅
-    updateTime: string // 估值更新时间
-    isRealValue: boolean // 是否是真实净值（jzrq 等于今天）
-    isTradingDay: boolean // 今天是否是交易日（gztime 是今天）
-  } | null> {
-    try {
-      // 添加时间戳防止缓存
-      const url = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`
-      const response = await axios.get(url, {
-        timeout: this.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: 'https://fund.eastmoney.com/',
-          'Cache-Control': 'no-cache',
-          Pragma: 'no-cache'
-        }
-      })
-
-      const match = response.data.match(/jsonpgz\((.+)\)/)
-      if (match) {
-        const data = JSON.parse(match[1])
-        const today = new Date().toISOString().split('T')[0]
-        const netValueDate = data.jzrq || ''
-        const gztime = data.gztime || ''
-        // 判断是否是真实净值：净值日期等于今天（收盘后更新了）
-        const isRealValue = netValueDate === today
-        // 判断今天是否是交易日：估值时间是今天
-        const isTradingDay = gztime.startsWith(today)
-
-        return {
-          netValue: parseFloat(data.dwjz) || 0,
-          netValueDate,
-          estimatedValue: isRealValue ? parseFloat(data.dwjz) || 0 : parseFloat(data.gsz) || 0,
-          estimatedChange: parseFloat(data.gszzl) || 0,
-          updateTime: gztime || new Date().toISOString(),
-          isRealValue,
-          isTradingDay
-        }
-      }
-      return null
-    } catch (error) {
-      console.error(`Failed to get fund valuation for ${code}:`, error)
-      return null
-    }
-  }
-
-  /**
-   * 获取基金最新净值（用于收盘后更新）
-   * 使用历史净值接口，数据更准确
-   * @param code 基金代码
-   * @returns 净值信息
-   */
-  async getLatestNetValue(code: string): Promise<{
-    netValue: number
-    netValueDate: string
-    change: number
-  } | null> {
-    try {
-      // 使用历史净值接口获取最新数据
-      const url = `https://fund.eastmoney.com/f10/F10DataApi.aspx`
-      const response = await axios.get(url, {
-        params: {
-          type: 'lsjz',
-          code: code,
-          page: 1,
-          per: 1
-        },
-        timeout: this.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: `https://fund.eastmoney.com/f10/jjjz_${code}.html`
-        }
-      })
-
-      // 解析返回的 HTML 表格
-      // 格式: <td>2026-02-04</td><td>1.2345</td><td>1.2345</td><td>0.50%</td>
-      const dateMatch = response.data.match(/<td>(\d{4}-\d{2}-\d{2})<\/td>/)
-      const valueMatch = response.data.match(/<td>(\d{4}-\d{2}-\d{2})<\/td><td[^>]*>([^<]+)<\/td>/)
-      const changeMatch = response.data.match(/<td[^>]*>(-?\d+\.?\d*)%<\/td>/)
-
-      if (dateMatch && valueMatch) {
-        return {
-          netValue: parseFloat(valueMatch[2]) || 0,
-          netValueDate: dateMatch[1],
-          change: changeMatch ? parseFloat(changeMatch[1]) : 0
-        }
-      }
-      return null
-    } catch (error) {
-      console.error(`Failed to get latest net value for ${code}:`, error)
-      return null
-    }
-  }
-
-  /**
-   * 根据基金代码搜索基金信息
-   * @param code 基金代码
-   * @returns 基金基本信息，未找到返回 null
+   * 搜索基金
    */
   async searchFund(code: string): Promise<FundBasicInfo | null> {
     try {
-      // 使用天天基金搜索 API
-      const response = await axios.get(this.searchUrl, {
-        params: {
-          callback: '',
-          m: 1,
-          key: code
-        },
-        timeout: this.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: 'https://fund.eastmoney.com/'
-        }
-      })
-
-      const fundInfo = this.parseSearchResult(response.data, code)
-      if (!fundInfo) {
-        return null
-      }
-
-      // 获取净值信息
-      const netValueInfo = await this.fetchNetValue(code)
-
-      return {
-        ...fundInfo,
-        netValue: netValueInfo.netValue,
-        netValueDate: netValueInfo.netValueDate
-      }
+      const url = `${API_BASE}/api/fundsuggest/FundSearch/api/FundSearchAPI.ashx`
+      const res = await requestWithRetry(() =>
+        axios.get(url, { params: { callback: '', m: 1, key: code }, timeout: TIMEOUT })
+      )
+      const info = this.parseSearchResult(res.data, code)
+      if (!info) return null
+      const netInfo = await this.fetchNetValue(code)
+      return { ...info, netValue: netInfo.netValue, netValueDate: netInfo.netValueDate }
     } catch (error) {
       console.error(`Failed to search fund ${code}:`, error)
       return null
@@ -181,155 +76,291 @@ export class FundFetcher implements IFundService {
   }
 
   /**
-   * 获取基金详情（包含前十大持仓）
-   * @param code 基金代码
-   * @returns 基金详情
+   * 获取基金详情
    */
   async getFundDetail(code: string): Promise<FundDetail> {
     const basicInfo = await this.searchFund(code)
     if (!basicInfo) {
       throw new Error(`未找到基金: ${code}`)
     }
-
     const holdings = await this.fetchHoldings(code)
-
-    return {
-      ...basicInfo,
-      holdings
-    }
+    return { ...basicInfo, holdings }
   }
 
   /**
-   * 解析搜索结果
-   * @param data API 返回数据
-   * @param targetCode 目标基金代码
-   * @returns 基金基本信息
+   * 获取基金估值
    */
-  private parseSearchResult(
-    data: SearchResponse | string,
-    targetCode: string
-  ): Omit<FundBasicInfo, 'netValue' | 'netValueDate'> | null {
+  async getFundValuation(
+    code: string,
+    options?: { isRealValue?: boolean; force?: boolean }
+  ): Promise<FundValuationResult | null> {
     try {
-      let result: SearchResponse
+      const tradingTime = isTradingTime()
+      const after20 = isAfter20()
+      const force = options?.force ?? false
 
-      // 处理可能的 JSONP 或 JSON 格式
-      if (typeof data === 'string') {
-        const jsonStr = data.replace(/^[^{]*/, '').replace(/[^}]*$/, '')
-        result = JSON.parse(jsonStr)
-      } else {
-        result = data
+      console.log(
+        `[getFundValuation] code=${code}, force=${force}, tradingTime=${tradingTime}, after20=${after20}`
+      )
+
+      // 强制刷新时，总是请求数据
+      if (force) {
+        if (after20) {
+          console.log(`[getFundValuation] ${code}: force + after20, fetching real net value`)
+          return await this.fetchRealNetValue(code)
+        }
+        // 盘中或收盘后20:00前，获取估值
+        console.log(`[getFundValuation] ${code}: force, fetching valuation`)
+        const url = `${API_BASE}/api/fundgz/js/${code}.js?rt=${Date.now()}`
+        const res = await requestWithRetry(() => axios.get(url, { timeout: TIMEOUT }))
+        return this.parseValuationResponse(res.data)
       }
 
-      if (!result.Datas || result.Datas.length === 0) {
+      // 非强制刷新的逻辑
+      // 20:00 及以后，如果已是真实数据，用缓存
+      if (after20 && options?.isRealValue) {
         return null
       }
 
-      // 查找精确匹配的基金（CATEGORY 700 表示基金）
-      const fund = result.Datas.find((item) => item.CODE === targetCode && item.CATEGORY === 700)
-      if (!fund) {
+      // 20:00 及以后，获取真实净值
+      if (after20) {
+        return await this.fetchRealNetValue(code)
+      }
+
+      // 收盘后 20:00 之前，返回 null（使用缓存）
+      if (!tradingTime) {
         return null
       }
 
-      return {
-        code: fund.CODE,
-        name: fund.NAME || fund.FundBaseInfo?.SHORTNAME || '',
-        type: fund.FundBaseInfo?.FTYPE || '混合型'
-      }
+      // 盘中获取估值
+      const url = `${API_BASE}/api/fundgz/js/${code}.js?rt=${Date.now()}`
+      const res = await requestWithRetry(() => axios.get(url, { timeout: TIMEOUT }))
+      return this.parseValuationResponse(res.data)
     } catch (error) {
-      console.error('Failed to parse search result:', error)
+      console.error(`Failed to get fund valuation for ${code}:`, error)
       return null
     }
   }
 
   /**
-   * 获取基金净值信息
-   * @param code 基金代码
-   * @returns 净值和日期
+   * 解析估值响应
    */
-  private async fetchNetValue(code: string): Promise<{ netValue: number; netValueDate: string }> {
-    try {
-      // 使用基金详情页 API 获取净值
-      const url = `https://fundgz.1234567.com.cn/js/${code}.js`
-      const response = await axios.get(url, {
-        timeout: this.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: 'https://fund.eastmoney.com/'
-        }
-      })
+  private parseValuationResponse(data: string): FundValuationResult | null {
+    const match = data.match(/jsonpgz\((.+)\)/)
+    if (match) {
+      const json = JSON.parse(match[1])
+      const netValue = parseFloat(json.dwjz) || 0
+      const estimatedValue = parseFloat(json.gsz) || 0
+      const today = new Date().toISOString().split('T')[0]
+      const gztime = json.gztime || ''
+      const isRealValue = json.jzrq === today || (netValue > 0 && netValue === estimatedValue)
+      const isTradingDay = gztime.startsWith(today)
 
-      // 解析 JSONP 格式: jsonpgz({"fundcode":"000001",...})
-      const match = response.data.match(/jsonpgz\((.+)\)/)
-      if (match) {
-        const data = JSON.parse(match[1])
-        return {
-          netValue: parseFloat(data.dwjz) || 0,
-          netValueDate: data.jzrq || new Date().toISOString().split('T')[0]
+      return {
+        netValue,
+        netValueDate: json.jzrq || '',
+        estimatedValue: isRealValue ? netValue : estimatedValue,
+        estimatedChange: parseFloat(json.gszzl) || 0,
+        updateTime: gztime || new Date().toISOString(),
+        isRealValue,
+        isTradingDay
+      }
+    }
+    return null
+  }
+
+  /**
+   * 获取真实净值（20:00后调用）
+   */
+  private async fetchRealNetValue(code: string): Promise<FundValuationResult | null> {
+    try {
+      const url = `${API_BASE}/api/fund/netvalue?code=${code}`
+      const res = await requestWithRetry(() => axios.get(url, { timeout: TIMEOUT }))
+      const data = res.data
+      if (data && data.netValueDate) {
+        const today = new Date().toISOString().split('T')[0]
+        if (data.netValueDate === today) {
+          return {
+            netValue: parseFloat(data.netValue) || 0,
+            netValueDate: data.netValueDate,
+            estimatedValue: parseFloat(data.netValue) || 0,
+            estimatedChange: parseFloat(data.change) || 0,
+            updateTime: new Date().toISOString(),
+            isRealValue: true
+          }
         }
       }
-
-      return { netValue: 0, netValueDate: new Date().toISOString().split('T')[0] }
+      return null
     } catch (error) {
-      console.error(`Failed to fetch net value for fund ${code}:`, error)
-      return { netValue: 0, netValueDate: new Date().toISOString().split('T')[0] }
+      console.error(`Failed to fetch real net value for ${code}:`, error)
+      return null
     }
   }
 
   /**
-   * 获取基金前十大持仓
-   * @param code 基金代码
-   * @returns 持仓列表
+   * 获取历史净值
    */
-  private async fetchHoldings(code: string): Promise<Holding[]> {
+  async fetchNetValueHistory(
+    code: string,
+    range: '1m' | '3m' | '6m' | '1y' | '3y' | 'all' = '1m'
+  ): Promise<NetValueHistory[]> {
     try {
-      // 使用基金持仓 API
-      const url = `https://fundf10.eastmoney.com/FundArchivesDatas.aspx`
-      const response = await axios.get(url, {
-        params: {
-          type: 'jjcc',
-          code: code,
-          topline: 10,
-          year: '',
-          month: '',
-          rt: Date.now()
-        },
-        timeout: this.timeout,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          Referer: `https://fundf10.eastmoney.com/ccmx_${code}.html`
-        }
-      })
+      let targetCount = 30
+      switch (range) {
+        case '1m':
+          targetCount = 25
+          break
+        case '3m':
+          targetCount = 65
+          break
+        case '6m':
+          targetCount = 130
+          break
+        case '1y':
+          targetCount = 250
+          break
+        case '3y':
+          targetCount = 750
+          break
+        case 'all':
+          targetCount = 3000
+          break
+      }
 
-      return this.parseHoldings(response.data)
+      const perPage = 49
+      const maxPages = Math.ceil(targetCount / perPage)
+      const url = `${API_BASE}/api/fundf10/F10DataApi.aspx`
+
+      // 并行请求多页数据
+      const pagePromises = []
+      for (let page = 1; page <= maxPages; page++) {
+        pagePromises.push(
+          requestWithRetry(() =>
+            axios.get(url, {
+              params: { type: 'lsjz', code, per: perPage, page },
+              timeout: TIMEOUT
+            })
+          ).then((res) => this.parseNetValueHistory(res.data))
+        )
+      }
+
+      const results = await Promise.all(pagePromises)
+      let allData: NetValueHistory[] = []
+      for (const pageData of results) {
+        allData = allData.concat(pageData)
+      }
+
+      // 去重并按日期排序
+      const dateMap = new Map<string, number>()
+      for (const item of allData) {
+        if (!dateMap.has(item.date)) {
+          dateMap.set(item.date, item.value)
+        }
+      }
+
+      const uniqueData = Array.from(dateMap.entries())
+        .map(([date, value]) => ({ date, value }))
+        .sort((a, b) => a.date.localeCompare(b.date))
+
+      // 根据时间范围过滤
+      const start = new Date()
+      switch (range) {
+        case '1m':
+          start.setMonth(start.getMonth() - 1)
+          break
+        case '3m':
+          start.setMonth(start.getMonth() - 3)
+          break
+        case '6m':
+          start.setMonth(start.getMonth() - 6)
+          break
+        case '1y':
+          start.setFullYear(start.getFullYear() - 1)
+          break
+        case '3y':
+          start.setFullYear(start.getFullYear() - 3)
+          break
+        case 'all':
+          start.setFullYear(2000)
+          break
+      }
+      const startDate = start.toISOString().split('T')[0]
+      return uniqueData.filter((d) => d.date >= startDate)
     } catch (error) {
-      console.error(`Failed to fetch holdings for fund ${code}:`, error)
+      console.error(`Failed to fetch net value history for ${code}:`, error)
       return []
     }
   }
 
   /**
-   * 解析持仓数据
-   * @param html HTML 内容
-   * @returns 持仓列表
+   * 获取持仓
    */
+  async fetchHoldings(code: string): Promise<Holding[]> {
+    try {
+      const url = `${API_BASE}/api/fundf10/FundArchivesDatas.aspx`
+      const res = await requestWithRetry(() =>
+        axios.get(url, {
+          params: { type: 'jjcc', code, topline: 10, year: '', month: '', rt: Date.now() },
+          timeout: TIMEOUT
+        })
+      )
+      return this.parseHoldings(res.data)
+    } catch (error) {
+      console.error(`Failed to fetch holdings for ${code}:`, error)
+      return []
+    }
+  }
+
+  private async fetchNetValue(code: string): Promise<{ netValue: number; netValueDate: string }> {
+    try {
+      const url = `${API_BASE}/api/fundgz/js/${code}.js`
+      const res = await requestWithRetry(() => axios.get(url, { timeout: TIMEOUT }))
+      const match = res.data.match(/jsonpgz\((.+)\)/)
+      if (match) {
+        const data = JSON.parse(match[1])
+        return { netValue: parseFloat(data.dwjz) || 0, netValueDate: data.jzrq || '' }
+      }
+    } catch (error) {
+      console.error(`Failed to fetch net value for ${code}:`, error)
+    }
+    return { netValue: 0, netValueDate: '' }
+  }
+
+  private parseSearchResult(
+    data: unknown,
+    targetCode: string
+  ): Omit<FundBasicInfo, 'netValue' | 'netValueDate'> | null {
+    try {
+      let result = data as {
+        Datas?: Array<{
+          CODE: string
+          NAME: string
+          CATEGORY: number
+          FundBaseInfo?: { FTYPE?: string }
+        }>
+      }
+      if (typeof data === 'string') {
+        const jsonStr = data.replace(/^[^{]*/, '').replace(/[^}]*$/, '')
+        result = JSON.parse(jsonStr)
+      }
+      if (!result.Datas?.length) return null
+      const fund = result.Datas.find((item) => item.CODE === targetCode && item.CATEGORY === 700)
+      if (!fund) return null
+      return { code: fund.CODE, name: fund.NAME || '', type: fund.FundBaseInfo?.FTYPE || '混合型' }
+    } catch {
+      return null
+    }
+  }
+
   private parseHoldings(html: string): Holding[] {
     const holdings: Holding[] = []
-
     try {
-      // 匹配第一个季度的表格（最新数据）
       const tableMatch = html.match(/<table class='w782 comm tzxq'>([\s\S]*?)<\/table>/)
-      if (!tableMatch) {
-        return []
-      }
-
-      const tableContent = tableMatch[1]
-
-      // 匹配所有数据行 (tbody 中的 tr)
+      if (!tableMatch) return []
       const rowRegex =
         /<tr><td>\d+<\/td><td><a[^>]*>(\d+)<\/a><\/td><td class='tol'><a[^>]*>([^<]+)<\/a><\/td>[\s\S]*?<td class='tor'>([\d.]+)%<\/td>/g
       let match
-
-      while ((match = rowRegex.exec(tableContent)) !== null) {
+      while ((match = rowRegex.exec(tableMatch[1])) !== null && holdings.length < 10) {
         holdings.push({
           stockCode: match[1],
           stockName: match[2].trim(),
@@ -337,16 +368,27 @@ export class FundFetcher implements IFundService {
           change: 0,
           price: 0
         })
-
-        if (holdings.length >= 10) break
       }
     } catch (error) {
-      console.error('Failed to parse holdings data:', error)
+      console.error('Failed to parse holdings:', error)
     }
-
     return holdings
+  }
+
+  private parseNetValueHistory(html: string): NetValueHistory[] {
+    const result: NetValueHistory[] = []
+    try {
+      const rowRegex = /<tr><td>(\d{4}-\d{2}-\d{2})<\/td><td[^>]*>([\d.]+)<\/td>/g
+      let match
+      while ((match = rowRegex.exec(html)) !== null) {
+        result.push({ date: match[1], value: parseFloat(match[2]) || 0 })
+      }
+      result.reverse()
+    } catch (error) {
+      console.error('Failed to parse net value history:', error)
+    }
+    return result
   }
 }
 
-// 导出单例
 export const fundFetcher = new FundFetcher()

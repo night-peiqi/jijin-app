@@ -28,11 +28,13 @@
           <FundList
             :funds="watchlistStore.funds"
             :selected-code="selectedFund?.code"
-            :total-change="watchlistStore.totalEstimatedChange"
+            :total-profit="watchlistStore.totalEstimatedProfit"
+            :refreshing="isRefreshing"
             @select="handleSelectFund"
             @sort="handleSort"
             @clear-all="handleClearAll"
             @refresh="handleRefresh"
+            @update-shares="handleUpdateShares"
           />
         </div>
 
@@ -51,6 +53,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { InfoFilled, ArrowUp } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { FundSearch, FundList, FundDetail, UpdateNotification } from './components'
 import { useWatchlistStore } from './stores/watchlist'
 import type { Fund, FundBasicInfo } from '@shared/types'
@@ -59,6 +62,7 @@ const watchlistStore = useWatchlistStore()
 
 const selectedFund = ref<Fund | null>(null)
 const isToolbarCollapsed = ref(false)
+const isRefreshing = ref(false)
 
 /**
  * 初始化：加载自选列表
@@ -141,11 +145,22 @@ function handleSort(order: 'asc' | 'desc') {
  * 处理手动刷新
  */
 async function handleRefresh() {
+  if (isRefreshing.value) return
+
+  isRefreshing.value = true
   watchlistStore.setError(null)
   try {
-    await window.electronAPI.refreshValuation()
+    const result = await window.electronAPI.refreshValuation()
+    if (result?.success) {
+      ElMessage.success('更新成功')
+    } else {
+      ElMessage.error(result?.error || '更新失败')
+    }
   } catch (err) {
     console.error('Refresh error:', err)
+    ElMessage.error('更新失败')
+  } finally {
+    isRefreshing.value = false
   }
 }
 
@@ -159,6 +174,18 @@ async function handleClearAll() {
     selectedFund.value = null
   } catch (err) {
     console.error('Clear watchlist error:', err)
+  }
+}
+
+/**
+ * 处理更新基金份额
+ */
+async function handleUpdateShares(code: string, shares: number) {
+  try {
+    await window.electronAPI.updateFundShares(code, shares)
+    watchlistStore.updateFundShares(code, shares)
+  } catch (err) {
+    console.error('Update shares error:', err)
   }
 }
 </script>

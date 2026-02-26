@@ -23,6 +23,7 @@ export interface StoredFund {
   holdings: StoredHolding[]
   addedAt: string // 添加时间 (ISO 日期字符串)
   isRealValue?: boolean // 是否是真实净值
+  shares?: number // 持有份额
 }
 
 /**

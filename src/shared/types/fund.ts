@@ -22,6 +22,7 @@ export interface Fund {
   updateTime: string // 估值更新时间 (ISO 字符串)
   holdings: Holding[] // 前十大持仓
   isRealValue?: boolean // 是否是真实净值（收盘后已更新）
+  shares?: number // 持有份额
 }
 
 /**

@@ -1,16 +1,15 @@
 <template>
   <div class="fund-list">
-    <!-- 总仓位卡片 -->
-    <div v-if="totalChange !== null" class="total-card" :class="getTotalChangeClass(totalChange)">
-      <span class="total-label">总仓位估值</span>
-      <span class="total-value">{{ formatChange(totalChange) }}</span>
+    <!-- 今日预估卡片 -->
+    <div class="total-card" :class="getProfitClass(totalProfit)">
+      <span class="total-label">今日预估</span>
+      <span class="total-value">{{ formatProfit(totalProfit) }} 元</span>
     </div>
 
     <!-- 列表头部 -->
     <div class="list-header">
       <span class="header-title">自选基金 ({{ funds.length }})</span>
       <div class="header-actions">
-        <el-button size="small" @click="handleRefresh">刷新</el-button>
         <el-button-group size="small">
           <el-button
             :type="sortOrder === 'desc' ? 'primary' : 'default'"
@@ -22,10 +21,20 @@
             涨幅↑
           </el-button>
         </el-button-group>
+        <el-button size="small" @click="handleRefresh">
+          <el-icon :class="{ 'is-loading': props.refreshing }"><Refresh /></el-icon>
+        </el-button>
         <el-button v-if="funds.length > 0" size="small" type="danger" plain @click="handleClearAll">
-          清空
+          <el-icon><Delete /></el-icon>
         </el-button>
       </div>
+    </div>
+
+    <!-- 列表表头 -->
+    <div class="list-table-header">
+      <span class="col-fund">基金</span>
+      <span class="col-profit">收益</span>
+      <span class="col-value">估值/份额</span>
     </div>
 
     <!-- 空状态 -->
@@ -42,38 +51,69 @@
         :class="{ 'is-selected': selectedCode === fund.code }"
         @click="handleSelect(fund)"
       >
-        <div class="fund-main">
-          <div class="fund-info">
-            <span class="fund-name">{{ fund.name }}</span>
-            <span class="fund-code">{{ fund.code }}</span>
-          </div>
-          <div class="fund-value">
-            <span class="estimated-value">{{ formatValue(fund.estimatedValue) }}</span>
-          </div>
+        <!-- 基金信息列 -->
+        <div class="col-fund">
+          <span class="fund-name">{{ fund.name }}</span>
+          <span class="fund-code">{{ fund.code }}</span>
         </div>
-        <div class="fund-change">
-          <span class="change-value" :class="getChangeClass(fund.estimatedChange)">
+
+        <!-- 收益列 -->
+        <div class="col-profit">
+          <span class="change-percent" :class="getChangeClass(fund.estimatedChange)">
             {{ formatChange(fund.estimatedChange) }}
           </span>
-          <span class="update-time">
-            {{ formatTime(fund.updateTime) }}
-            <span v-if="fund.isRealValue" class="real-value-tag">已更新</span>
+          <span class="profit-amount" :class="getChangeClass(fund.estimatedChange)">
+            {{ formatFundProfit(fund) }}
+          </span>
+        </div>
+
+        <!-- 估值/份额列 -->
+        <div class="col-value">
+          <span class="estimated-value">{{ formatValue(fund.estimatedValue) }}</span>
+          <span class="shares-value" @click.stop="handleEditShares(fund)">
+            {{ formatShares(fund.shares) }}
           </span>
         </div>
       </div>
     </div>
+
+    <!-- 份额编辑弹窗 -->
+    <el-dialog
+      v-model="sharesDialogVisible"
+      title="设置持有份额"
+      width="320px"
+      :close-on-click-modal="false"
+    >
+      <div class="shares-dialog-content">
+        <p class="shares-fund-name">{{ editingFund?.name }}</p>
+        <el-input-number
+          v-model="editingShares"
+          :min="0"
+          :precision="2"
+          :step="100"
+          placeholder="请输入持有份额"
+          style="width: 100%"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="sharesDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleSaveShares">确定</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
+import { Refresh, Delete } from '@element-plus/icons-vue'
 import type { Fund } from '@shared/types'
 
 const props = defineProps<{
   funds: Fund[]
   selectedCode?: string
-  totalChange?: number | null
+  totalProfit?: number | null
+  refreshing?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -81,13 +121,16 @@ const emit = defineEmits<{
   (e: 'sort', order: 'asc' | 'desc'): void
   (e: 'clear-all'): void
   (e: 'refresh'): void
+  (e: 'update-shares', code: string, shares: number): void
 }>()
 
 const sortOrder = ref<'asc' | 'desc'>('desc')
+const sharesDialogVisible = ref(false)
+const editingFund = ref<Fund | null>(null)
+const editingShares = ref(0)
 
 /**
  * 排序后的基金列表
- * Requirement 3.6: 支持按涨跌幅排序自选列表
  */
 const sortedFunds = computed(() => {
   const sorted = [...props.funds]
@@ -108,16 +151,10 @@ function handleSort(order: 'asc' | 'desc') {
   emit('sort', order)
 }
 
-/**
- * 刷新估值数据
- */
 function handleRefresh() {
   emit('refresh')
 }
 
-/**
- * 清空所有自选基金
- */
 async function handleClearAll() {
   try {
     await ElMessageBox.confirm(`确定要清空全部 ${props.funds.length} 个自选基金吗？`, '清空确认', {
@@ -133,6 +170,26 @@ async function handleClearAll() {
 }
 
 /**
+ * 打开份额编辑弹窗
+ */
+function handleEditShares(fund: Fund) {
+  editingFund.value = fund
+  editingShares.value = fund.shares || 0
+  sharesDialogVisible.value = true
+}
+
+/**
+ * 保存份额
+ */
+function handleSaveShares() {
+  if (editingFund.value) {
+    emit('update-shares', editingFund.value.code, editingShares.value)
+    ElMessage.success('份额已更新')
+  }
+  sharesDialogVisible.value = false
+}
+
+/**
  * 格式化净值显示
  */
 function formatValue(value: number): string {
@@ -142,7 +199,6 @@ function formatValue(value: number): string {
 
 /**
  * 格式化涨跌幅显示
- * Requirement 3.2: 显示今日涨跌幅
  */
 function formatChange(change: number | null | undefined): string {
   if (change === null || change === undefined || isNaN(change)) return '--'
@@ -151,10 +207,49 @@ function formatChange(change: number | null | undefined): string {
 }
 
 /**
- * 获取涨跌颜色类名
- * Requirement 2.4: 通过颜色变化（红涨绿跌）提示用户
+ * 格式化份额显示
  */
-function getChangeClass(change: number): string {
+function formatShares(shares: number | undefined): string {
+  if (!shares || shares === 0) return '设置份额'
+  return shares.toFixed(2)
+}
+
+/**
+ * 计算单个基金的预估盈利
+ * 盈利 = 份额 × 估值 × 涨跌幅% / (1 + 涨跌幅%)
+ * 即：今日市值 - 昨日市值 = 份额 × 估值 - 份额 × 昨日净值
+ */
+function formatFundProfit(fund: Fund): string {
+  if (!fund.shares || fund.shares === 0) return '--'
+  if (fund.estimatedChange === undefined || isNaN(fund.estimatedChange)) return '--'
+  if (!fund.estimatedValue || fund.estimatedValue === 0) return '--'
+
+  // 今日市值
+  const todayValue = fund.shares * fund.estimatedValue
+  // 昨日净值 = 今日估值 / (1 + 涨跌幅%)
+  const yesterdayNetValue = fund.estimatedValue / (1 + fund.estimatedChange / 100)
+  // 昨日市值
+  const yesterdayValue = fund.shares * yesterdayNetValue
+  // 盈利
+  const profit = todayValue - yesterdayValue
+
+  const sign = profit >= 0 ? '+' : ''
+  return `${sign}${profit.toFixed(2)}`
+}
+
+/**
+ * 格式化总盈利显示
+ */
+function formatProfit(profit: number | null | undefined): string {
+  if (profit === null || profit === undefined || isNaN(profit)) return '+0.00'
+  const sign = profit >= 0 ? '+' : ''
+  return `${sign}${profit.toFixed(2)}`
+}
+
+/**
+ * 获取涨跌颜色类名
+ */
+function getChangeClass(change: number | undefined): string {
   if (change === undefined || isNaN(change)) return 'change-neutral'
   if (change > 0) return 'change-up'
   if (change < 0) return 'change-down'
@@ -162,76 +257,44 @@ function getChangeClass(change: number): string {
 }
 
 /**
- * 获取总仓位涨跌颜色类名
+ * 获取盈利颜色类名
  */
-function getTotalChangeClass(change: number | null | undefined): string {
-  if (change === null || change === undefined || isNaN(change)) return 'change-neutral'
-  if (change > 0) return 'change-up'
-  if (change < 0) return 'change-down'
+function getProfitClass(profit: number | null | undefined): string {
+  if (profit === null || profit === undefined || isNaN(profit)) return 'change-neutral'
+  if (profit > 0) return 'change-up'
+  if (profit < 0) return 'change-down'
   return 'change-neutral'
-}
-
-/**
- * 格式化更新时间
- * Requirement 3.2: 显示估值时间
- */
-function formatTime(time: string): string {
-  if (!time) return '--'
-  try {
-    const date = new Date(time)
-    return date.toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
-  } catch {
-    return '--'
-  }
 }
 </script>
 
 <style scoped>
 .fund-list {
-  background: white;
+  background: #ffffff;
   border-radius: 8px;
   overflow: hidden;
   height: 100%;
   display: flex;
   flex-direction: column;
-}
-
-.list-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #ebeef5;
-  flex-shrink: 0;
-}
-
-.header-title {
-  font-size: 16px;
-  font-weight: 600;
   color: #303133;
 }
 
+/* 今日预估卡片 */
 .total-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  border-radius: 8px 8px 0 0;
+  padding: 16px 20px;
+  background: #ffffff;
   border-bottom: 1px solid #ebeef5;
-  background: white;
 }
 
 .total-label {
-  font-size: 13px;
-  color: #606266;
+  font-size: 14px;
+  color: #909399;
 }
 
 .total-value {
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
   font-family: 'SF Mono', Monaco, monospace;
 }
@@ -248,12 +311,45 @@ function formatTime(time: string): string {
   color: #909399;
 }
 
+/* 列表头部 */
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #ebeef5;
+  flex-shrink: 0;
+}
+
+.header-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
 .header-actions {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
+/* 列表表头 */
+.list-table-header {
+  display: grid;
+  grid-template-columns: 1fr 100px 100px;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: #909399;
+  background: #f5f7fa;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.list-table-header .col-profit,
+.list-table-header .col-value {
+  text-align: right;
+}
+
+/* 空状态 */
 .empty-state {
   padding: 40px 20px;
   flex: 1;
@@ -262,18 +358,19 @@ function formatTime(time: string): string {
   justify-content: center;
 }
 
+/* 列表内容 */
 .list-content {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
 }
 
+/* 基金项 */
 .fund-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #f0f2f5;
+  display: grid;
+  grid-template-columns: 1fr 100px 100px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #ebeef5;
   cursor: pointer;
   transition: background-color 0.2s;
 }
@@ -290,23 +387,16 @@ function formatTime(time: string): string {
   border-bottom: none;
 }
 
-.fund-main {
+/* 基金信息列 */
+.fund-item .col-fund {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  flex: 1;
-}
-
-.fund-info {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .fund-name {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   color: #303133;
   overflow: hidden;
@@ -317,34 +407,54 @@ function formatTime(time: string): string {
 .fund-code {
   font-size: 12px;
   color: #909399;
-  flex-shrink: 0;
 }
 
-.fund-value {
-  font-size: 13px;
-  color: #606266;
-}
-
-.estimated-value {
-  font-family: 'SF Mono', Monaco, monospace;
-}
-
-.fund-change {
+/* 收益列 */
+.fund-item .col-profit {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
-  flex-shrink: 0;
-  margin-left: 12px;
 }
 
-.change-value {
-  font-size: 16px;
+.change-percent {
+  font-size: 14px;
   font-weight: 600;
   font-family: 'SF Mono', Monaco, monospace;
 }
 
-/* 涨跌颜色 - Requirement 2.4 */
+.profit-amount {
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+/* 估值/份额列 */
+.fund-item .col-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.estimated-value {
+  font-size: 14px;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: #303133;
+}
+
+.shares-value {
+  font-size: 12px;
+  color: #409eff;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.shares-value:hover {
+  color: #66b1ff;
+  text-decoration: underline;
+}
+
+/* 涨跌颜色 */
 .change-up {
   color: #f56c6c;
 }
@@ -357,26 +467,21 @@ function formatTime(time: string): string {
   color: #909399;
 }
 
-.update-time {
-  font-size: 12px;
-  color: #909399;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+/* 份额编辑弹窗 */
+.shares-dialog-content {
+  text-align: center;
 }
 
-.real-value-tag {
-  font-size: 10px;
-  color: #67c23a;
-  background: #f0f9eb;
-  padding: 1px 4px;
-  border-radius: 2px;
+.shares-fund-name {
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #606266;
 }
 
 /* 响应式适配 */
 @media (max-width: 600px) {
   .list-header {
-    padding: 12px;
+    padding: 10px 12px;
     flex-wrap: wrap;
     gap: 8px;
   }
@@ -385,32 +490,23 @@ function formatTime(time: string): string {
     font-size: 14px;
   }
 
+  .list-table-header,
   .fund-item {
-    padding: 12px;
+    grid-template-columns: 1fr 80px 80px;
+    padding: 10px 12px;
   }
 
   .fund-name {
-    font-size: 14px;
-    max-width: 120px;
-  }
-
-  .change-value {
-    font-size: 14px;
-  }
-
-  .fund-value {
-    font-size: 12px;
-  }
-}
-
-@media (max-width: 400px) {
-  .fund-info {
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .fund-name {
+    font-size: 13px;
     max-width: 100px;
+  }
+
+  .change-percent {
+    font-size: 13px;
+  }
+
+  .total-value {
+    font-size: 20px;
   }
 }
 </style>

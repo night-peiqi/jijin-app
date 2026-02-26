@@ -57,6 +57,29 @@ export const useWatchlistStore = defineStore('watchlist', {
       if (validFunds.length === 0) return null
       const sum = validFunds.reduce((acc, f) => acc + f.estimatedChange, 0)
       return sum / validFunds.length
+    },
+
+    /**
+     * 今日预估总盈利（根据份额和估值计算）
+     * 盈利 = 份额 × 估值 × 涨跌幅% / (1 + 涨跌幅%)
+     */
+    totalEstimatedProfit: (state): number | null => {
+      const fundsWithShares = state.funds.filter(
+        (f) =>
+          f.shares &&
+          f.shares > 0 &&
+          f.estimatedChange !== undefined &&
+          !isNaN(f.estimatedChange) &&
+          f.estimatedValue > 0
+      )
+      if (fundsWithShares.length === 0) return null
+      return fundsWithShares.reduce((acc, f) => {
+        const todayValue = f.shares! * f.estimatedValue
+        const yesterdayNetValue = f.estimatedValue / (1 + f.estimatedChange / 100)
+        const yesterdayValue = f.shares! * yesterdayNetValue
+        const profit = todayValue - yesterdayValue
+        return acc + profit
+      }, 0)
     }
   },
 
@@ -187,6 +210,23 @@ export const useWatchlistStore = defineStore('watchlist', {
       this.funds = []
       this.error = null
       this.lastUpdateTime = new Date().toISOString()
+    },
+
+    /**
+     * 更新基金持有份额
+     *
+     * @param code 基金代码
+     * @param shares 持有份额
+     * @returns true 如果更新成功，false 如果基金不存在
+     */
+    updateFundShares(code: string, shares: number): boolean {
+      const fund = this.funds.find((f) => f.code === code)
+      if (!fund) {
+        return false
+      }
+      fund.shares = shares
+      this.lastUpdateTime = new Date().toISOString()
+      return true
     }
   }
 })

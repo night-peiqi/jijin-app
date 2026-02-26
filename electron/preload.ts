@@ -17,6 +17,12 @@ const electronAPI = {
   getWatchlist: () => ipcRenderer.invoke(IPC_CHANNELS.WATCHLIST_GET),
   saveWatchlist: (funds: unknown[]) => ipcRenderer.invoke(IPC_CHANNELS.WATCHLIST_SAVE, funds),
   clearWatchlist: () => ipcRenderer.invoke(IPC_CHANNELS.WATCHLIST_CLEAR),
+  updateFundShares: (code: string, shares: number) =>
+    ipcRenderer.invoke(IPC_CHANNELS.WATCHLIST_UPDATE_SHARES, code, shares),
+
+  // 历史净值
+  getNetValueHistory: (code: string, range: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.NET_VALUE_HISTORY, code, range),
 
   // 应用更新
   checkUpdate: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_CHECK),

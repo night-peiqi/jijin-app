@@ -16,6 +16,10 @@ export const IPC_CHANNELS = {
   WATCHLIST_GET: 'watchlist:get',
   WATCHLIST_SAVE: 'watchlist:save',
   WATCHLIST_CLEAR: 'watchlist:clear',
+  WATCHLIST_UPDATE_SHARES: 'watchlist:updateShares',
+
+  // 历史净值
+  NET_VALUE_HISTORY: 'fund:netValueHistory',
 
   // 应用更新
   UPDATE_CHECK: 'update:check',
